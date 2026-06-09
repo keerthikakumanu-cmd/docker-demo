@@ -6,7 +6,6 @@ node {
      commit_id = readFile('.git/commit-id').trim()
    }
    stage('test') {
-     // 🟢 ADDED: Version fix wrapper around the native pull and inside block
      withEnv(['DOCKER_API_VERSION=1.45']) {
        def myTestContainer = docker.image('node:16')
        myTestContainer.pull()
@@ -17,12 +16,12 @@ node {
      }
    }
    stage('test with a DB') {
-     // 🟢 ADDED: Version fix wrapper around the database lifecycle
      withEnv(['DOCKER_API_VERSION=1.45']) {
-       def mysql = docker.image('mysql').run("-e MYSQL_ALLOW_EMPTY_PASSWORD=yes") 
+       def mysql = docker.image('mysql:5.7').run("-e MYSQL_ALLOW_EMPTY_PASSWORD=yes --health-cmd='mysqladmin ping' --health-interval=2s") 
+       sh "sleep 5"
        def myTestContainer = docker.image('node:16')
        myTestContainer.pull()
-       myTestContainer.inside("--link ${mysql.id}:mysql") { // using linking, mysql will be available at host: mysql, port: 3306
+       myTestContainer.inside("--link ${mysql.id}:mysql") { 
             sh 'npm install --only=dev' 
             sh 'npm test'                     
        }                                    
@@ -30,13 +29,23 @@ node {
      }
    }                                      
    stage('docker build/push') {            
-     // 🟢 ADDED: Version fix wrapper around the registry block
-     withEnv(['DOCKER_API_VERSION=1.45']) {
-       docker.withRegistry('https://index.docker.io/v2/', 'dockerhub-final') {
-         // Note: Split build and push into two steps to prevent Groovy compilation errors
-         def app = docker.build("keerthikumar45/docker-nodejs-demo:${commit_id}", '.')
-         app.push()
-       }                                      
+     // 🎯 FIX: We securely bind the credentials to plain shell variables directly from the vault
+     withCredentials([usernamePassword(credentialsId: 'dockerhub-final', passwordVariable: 'DOCKER_TOKEN', usernameVariable: 'DOCKER_USER')]) {
+       withEnv(['DOCKER_API_VERSION=1.45']) {
+         
+         echo "Executing clean CLI authentication bypass..."
+         
+         // 1. Log in securely using standard terminal pipes
+         sh "echo \$DOCKER_TOKEN | docker login -u \$DOCKER_USER --password-stdin"
+         
+         // 2. Natively build the artifact tag
+         sh "docker build -t keerthikumar45/docker-nodejs-demo:${commit_id} ."
+         
+         // 3. Push it directly to the public registry
+         sh "docker push keerthikumar45/docker-nodejs-demo:${commit_id}"
+         
+         echo "Image successfully shipped!"
+       }
      }
    }                                        
 }
